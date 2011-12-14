@@ -113,10 +113,17 @@ gxp.FeatureEditPopup = Ext.extend(GeoExt.Popup, {
      */
     editing: false,
     
-    /** private: property[grid]
-     *  ``Ext.grid.PropertyGrid``
+    /** api: config[editor]
+     * ``String`` or ``Object``
+     * Plugin type or configuration for feature editing in the popup.
+     * Valid choices are ``gxp.plugins.FeatureEditorGrid``, 
+     * ``gxp.plugins.FeatureEditorForm``
      */
-    grid: null,
+    
+    /** private: property[editor]
+     *  ``Ext.grid.PropertyGrid`` or ``Ext.form.FormPanel``
+     */
+    editor: null,
     
     /** private: property[modifyControl]
      *  ``OpenLayers.Control.ModifyFeature`` If in editing mode, we will have
@@ -205,10 +212,34 @@ gxp.FeatureEditPopup = Ext.extend(GeoExt.Popup, {
             this.location = feature;
         }
         
+        //no editor defined. defaults to FeatureEditorGrid
+        if(!this.editor){
+            this.editor = {
+                ptype: 'gxp_editorgrid'
+            };
+        }
+        //editor is defined as simple string, we need an object to pass by reference
+        else if(Ext.isString(this.editor)){
+            this.editor = {
+                ptype:this.editor
+            };
+        }
+        
+        //no plugins defined
+        if(!this.initialConfig.plugins){
+            this.plugins = [this.editor];
+        }
+        //plugins is a single string ptype
+        else if(Ext.isString(this.initialConfig.plugins)){
+            this.plugins = [this.initialConfig.plugins,this.editor];
+        }
+        //plugins defined as array
+        else{
+            this.plugins.push(this.editor);
+        }
+        
         this.anchored = !this.editing;
         
-        var customEditors = {};
-        var customRenderers = {};
         if(this.schema) {
             var attributes = {};
             if (this.fields) {
@@ -234,63 +265,11 @@ gxp.FeatureEditPopup = Ext.extend(GeoExt.Popup, {
                         this.excludeFields.push(name);
                     }
                 }
-                var value = feature.attributes[name];
-                var fieldCfg = GeoExt.form.recordToField(r);
-                var listeners;
-                if (typeof value == "string") {
-                    var format;
-                    switch(type.split(":").pop()) {
-                        case "date":
-                            format = this.dateFormat;
-                            fieldCfg.editable = false;
-                            break;
-                        case "dateTime":
-                            if (!format) {
-                                format = this.dateFormat + " " + this.timeFormat;
-                                // make dateTime fields editable because the
-                                // date picker does not allow to edit time
-                                fieldCfg.editable = true;
-                            }
-                            fieldCfg.format = format;
-                            //TODO When http://trac.osgeo.org/openlayers/ticket/3131
-                            // is resolved, remove the listeners assignment below
-                            listeners = {
-                                "startedit": function(el, value) {
-                                    if (!(value instanceof Date)) {
-                                        var date = Date.parseDate(value.replace(/Z$/, ""), "c");
-                                        if (date) {
-                                            this.setValue(date);
-                                        }
-                                    }
-                                }
-                            };
-                            customRenderers[name] = (function() {
-                                return function(value) {
-                                    //TODO When http://trac.osgeo.org/openlayers/ticket/3131
-                                    // is resolved, change the 5 lines below to
-                                    // return value.format(format);
-                                    var date = value;
-                                    if (typeof value == "string") {
-                                        date = Date.parseDate(value.replace(/Z$/, ""), "c");
-                                    }
-                                    return date ? date.format(format) : value;
-                                };
-                            })();
-                            break;
-                        case "boolean":
-                            listeners = {
-                                "startedit": function(el, value) {
-                                    this.setValue(Boolean(value));
-                                }
-                            };
-                            break;
-                    }
+                if (!this.excludeFields || this.excludeFields.indexOf(name) == -1) {
+                    var value = feature.attributes[name];
+                    var fieldCfg = GeoExt.form.recordToField(r);
+                    attributes[name] = value;
                 }
-                customEditors[name] = new Ext.grid.GridEditor({
-                    field: Ext.create(fieldCfg),
-                    listeners: listeners
-                });
-                attributes[name] = value;
             }, this);
             feature.attributes = attributes;
         }
@@ -338,51 +317,8 @@ gxp.FeatureEditPopup = Ext.extend(GeoExt.Popup, {
             scope: this
         });
         
-        var ucExcludeFields = this.excludeFields ?
-            this.excludeFields.join(",").toUpperCase().split(",") : [];
-        this.grid = new Ext.grid.PropertyGrid({
-            border: false,
-            source: feature.attributes,
-            customEditors: customEditors,
-            customRenderers: customRenderers,
-            propertyNames: this.propertyNames,
-            viewConfig: {
-                forceFit: true,
-                getRowClass: function(record) {
-                    if (ucExcludeFields.indexOf(record.get("name").toUpperCase()) !== -1) {
-                        return "x-hide-nosize";
-                    }
-                }
-            },
-            listeners: {
-                "beforeedit": function() {
-                    return this.editing;
-                },
-                "propertychange": function() {
-                    this.setFeatureState(this.getDirtyState());
-                },
-                scope: this
-            },
-            initComponent: function() {
-                //TODO This is a workaround for maintaining the order of the
-                // feature attributes. Decide if this should be handled in
-                // another way.
-                var origSort = Ext.data.Store.prototype.sort;
-                Ext.data.Store.prototype.sort = function() {};
-                Ext.grid.PropertyGrid.prototype.initComponent.apply(this, arguments);
-                Ext.data.Store.prototype.sort = origSort;
-            }
-        });
-        
-        /**
-         * TODO: This is a workaround for getting attributes with undefined
-         * values to show up in the property grid.  Decide if this should be 
-         * handled in another way.
-         */
-        this.grid.propStore.isEditableValue = function() {return true;};
-
         this.items = [
-            this.grid
+            this.editor
         ];
 
         this.bbar = new Ext.Toolbar({
